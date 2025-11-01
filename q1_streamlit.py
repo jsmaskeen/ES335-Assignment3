@@ -6,10 +6,45 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import re
+import random
 
 MODEL_DIR = Path("saved_models_q1")
 MODEL_DIR2 = Path("saved_models_q1_2")
 
+def levenshtein_distance(s1, s2):
+    m, n = len(s1), len(s2)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m + 1):
+        dp[i][0] = i
+    for j in range(n + 1):
+        dp[0][j] = j
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            cost = 0 if s1[i - 1] == s2[j - 1] else 1
+            dp[i][j] = min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
+    return dp[m][n]
+
+
+def find_closest_word_using_levelshtein(word, vocab_keys):
+    min_dist = float('inf')
+    closest_word = word
+    len_word = len(word)
+    search_space = [v for v in vocab_keys if abs(len(v) - len_word) < 3]
+    if not search_space: 
+        search_space = vocab_keys
+        
+    for v_word in search_space:
+        dist = levenshtein_distance(word, v_word)
+        if dist < min_dist:
+            min_dist = dist
+            closest_word = v_word
+        if min_dist <= 1:
+            break
+        
+    return closest_word
+
+def find_random_word(vocab_keys):
+    return random.choice(list(vocab_keys))
 
 class MLPTextGenerator_(nn.Module):
     def __init__(self, ctx_window, vocab_size, embedding_dim, hidden_dim, activation):
@@ -29,14 +64,45 @@ class MLPTextGenerator_(nn.Module):
 
 
 def generate_text(
-    model, itos, stoi, ctx_window, device, prompt="", max_new_words=100, temperature=1.0
+    model, itos, stoi, ctx_window, device, prompt="", max_new_words=100, temperature=1.0,
+    unk_strat="Levenshtein Distance"
 ):
     if temperature <= 0:
         st.warning("Warning: Temperature must be > 0. Setting to 1.0.")
         temperature = 1.0
     model.eval()
-    prompt_words = prompt.lower().split()
-    context_indices = [stoi.get(word, 0) for word in prompt_words]
+    
+    prompt_words_original = prompt.lower().split()
+    prompt_words_processed = []
+    replacements_made = False
+    context_indices = []
+    vocab_keys = stoi.keys()
+    
+    for word in prompt_words_original:
+        if word in stoi:
+            context_indices.append(stoi[word])
+            prompt_words_processed.append(word)
+        else:
+            replacement_word = None
+            if unk_strat == "Levenshtein Distance":
+                replacement_word = find_closest_word_using_levelshtein(word, vocab_keys)
+            elif unk_strat == "Random Word":
+                replacement_word = find_random_word(vocab_keys)
+            
+            if replacement_word:
+                replacements_made = True
+                context_indices.append(stoi[replacement_word])
+                prompt_words_processed.append(f"~~{word}~~ {replacement_word}")
+            else:
+                # use . token
+                context_indices.append(0) 
+                prompt_words_processed.append(word)
+    
+    if replacements_made:
+        st.info(f"Replaced unknown words using the '{unk_strat}' strategy.")
+    
+    # prompt_words = prompt.lower().split()
+    # context_indices = [stoi.get(word, 0) for word in prompt_words]
     context = context_indices[-ctx_window:]
     if len(context) < ctx_window:
         context = [0] * (ctx_window - len(context)) + context
@@ -56,7 +122,7 @@ def generate_text(
             generated_words.append(word)
             context = context[1:] + [next_token_idx]
     model.train()
-    full_text = prompt_words + generated_words
+    full_text = prompt_words_processed + generated_words
     return " ".join(full_text)
 
 
@@ -239,35 +305,40 @@ class MLPTextGenerator_Code(nn.Module):
         out = self.activation(self.fc1(embedded))
         return self.fc2(out)
 
+
 def tokenize_prompt_string(prompt_code):
     token_specification = [
-        ('INCL', r'#include'),
-        ('HEAD',   r'<[^>]+>'),
-        ('PREP', r'#\s*(define|ifdef|ifndef|endif)'),
-        ('KWRD', r'\b(auto|break|case|char|const|continue|default|do|double|else|enum|extern|'
-                r'float|for|goto|if|inline|int|long|register|restrict|return|short|signed|sizeof|'
-                r'static|struct|switch|typedef|union|unsigned|void|volatile|while)\b'),
-        ('IDFR', r'\b[A-Za-z_][A-Za-z0-9_]*\b'),
-        ('NMBR', r'\b\d+(\.\d+)?\b'),
-        ('STRN', r'\"(?:\\.|[^\"\\\\])*\"'),
-        ('OPRT', r'==|!=|<=|>=|->|&&|\|\||\+\+|--|[+\-*/%=&|<>!~^]'),
-        ('DLMT', r'[;:,.\\[\\]\\(\\)\\{\\}]'),
-        ('NEWL', r'\n'),
-        ('WHSP', r'[ \t]+'),
-        ('MTAN', r'.'),
+        ("INCL", r"#include"),
+        ("HEAD", r"<[^>]+>"),
+        ("PREP", r"#\s*(define|ifdef|ifndef|endif)"),
+        (
+            "KWRD",
+            r"\b(auto|break|case|char|const|continue|default|do|double|else|enum|extern|"
+            r"float|for|goto|if|inline|int|long|register|restrict|return|short|signed|sizeof|"
+            r"static|struct|switch|typedef|union|unsigned|void|volatile|while)\b",
+        ),
+        ("IDFR", r"\b[A-Za-z_][A-Za-z0-9_]*\b"),
+        ("NMBR", r"\b\d+(\.\d+)?\b"),
+        ("STRN", r"\"(?:\\.|[^\"\\\\])*\""),
+        ("OPRT", r"==|!=|<=|>=|->|&&|\|\||\+\+|--|[+\-*/%=&|<>!~^]"),
+        ("DLMT", r"[;:,.\\[\\]\\(\\)\\{\\}]"),
+        ("NEWL", r"\n"),
+        ("WHSP", r"[ \t]+"),
+        ("MTAN", r"."),
     ]
-    master_pattern = re.compile('|'.join(f'(?P<{name}>{pattern})' for name, pattern in token_specification))
+    master_pattern = re.compile(
+        "|".join(f"(?P<{name}>{pattern})" for name, pattern in token_specification)
+    )
     tokens = []
     for match in master_pattern.finditer(prompt_code):
         token_type = match.lastgroup
-        if token_type == 'NEWL':
-            tokens.append('\\n')
-        elif token_type == 'WHSP':
-            tokens.append('\\s')
-        elif token_type != 'MTAN':
+        if token_type == "NEWL":
+            tokens.append("\\n")
+        elif token_type == "WHSP":
+            tokens.append("\\s")
+        elif token_type != "MTAN":
             tokens.append(match.group())
     return tokens
-
 
 
 def generate_code(model, itos, stoi, context_words, block_size, device, max_len=30):
@@ -283,7 +354,7 @@ def generate_code(model, itos, stoi, context_words, block_size, device, max_len=
             y_pred = model(x)
             probs = torch.nn.functional.softmax(y_pred, dim=1)
             ix = torch.multinomial(probs, num_samples=1).item()
-            word = itos.get(ix, "<UNKN>")  
+            word = itos.get(ix, "<UNKN>")
             if ix == unk_idx:
                 break
             context.append(ix)
@@ -332,7 +403,21 @@ def load_model_code(model_dir, embedding_dim, ctx_sz, activation_name, model_typ
 
 def visualize_code_embeddings(model, stoi):
     code_groups = {
-         "types": ["int", "char", "void", "struct", "union", "enum", "double", "float", "long", "short", "unsigned", "signed", "typedef"],
+        "types": [
+            "int",
+            "char",
+            "void",
+            "struct",
+            "union",
+            "enum",
+            "double",
+            "float",
+            "long",
+            "short",
+            "unsigned",
+            "signed",
+            "typedef",
+        ],
         "control": ["if", "else", "for", "while", "return", "break", "switch"],
         "operators": ["+", "-", "*", "/", "=", "->", "&", "|", "=="],
         "delimiters": ["(", ")", "{", "}", "[", "]", ";", ","],
@@ -351,7 +436,7 @@ def visualize_code_embeddings(model, stoi):
     word_indices = [stoi[word] for word in words_to_plot]
     selected_embeddings = embeddings[word_indices]
     tsne = TSNE(
-        n_components=2, random_state=42, perplexity=min(5, len(word_indices)-1)
+        n_components=2, random_state=42, perplexity=min(5, len(word_indices) - 1)
     )
     embeddings_2d = tsne.fit_transform(selected_embeddings)
     fig, ax = plt.subplots(figsize=(16, 12))
@@ -404,6 +489,13 @@ with tab1:
         )
 
         st.header("Generation Parameters")
+
+        text_unk_strategy = st.selectbox(
+            "Unknown Word Strategy",
+            ["Levenshtein Distance", "Random Word", "None"],
+            key="text_unkown"
+        )
+        
         text_temperature = st.slider(
             "Temperature", 0.01, 3.0, 1.0, 0.01, key="text_temp"
         )
@@ -418,6 +510,7 @@ with tab1:
         )
         if st.button("Generate Text", key="text_generate"):
             torch.manual_seed(text_seed)
+            random.seed(text_seed)
             best_model, stoi, itos, ctx_window, device = load_model(
                 MODEL_DIR, text_embedding_dim, text_ctx_sz, text_activation_name, "best"
             )
@@ -441,6 +534,7 @@ with tab1:
                         text_prompt,
                         text_max_new_words,
                         text_temperature,
+                        unk_strat=text_unk_strategy
                     )
                     final_text = generate_text(
                         final_model,
@@ -451,6 +545,7 @@ with tab1:
                         text_prompt,
                         text_max_new_words,
                         text_temperature,
+                        unk_strat=text_unk_strategy
                     )
 
                 res_col1, res_col2 = st.columns(2)
@@ -480,6 +575,13 @@ with tab2:
         )
 
         st.header("Generation Parameters")
+        
+        unk_strat = st.selectbox(
+            "Unknown Token Strategy",
+            ["Levenshtein Distance", "Random Token", "None"],
+            key="code_unk_strat"
+        )
+        
         code_max_len = st.number_input(
             "Max Tokens to Generate", 1, 500, 50, key="code_max_len"
         )
@@ -494,6 +596,7 @@ with tab2:
         )
         if st.button("Generate Code", key="code_generate"):
             torch.manual_seed(code_seed)
+            random.seed(code_seed)
             best_model, stoi, itos, ctx_window, device = load_model_code(
                 MODEL_DIR2,
                 code_embedding_dim,
@@ -511,13 +614,51 @@ with tab2:
 
             if best_model and final_model:
                 st.success("Models loaded successfully.")
+                
+                initial_tokens = tokenize_prompt_string(code_prompt)
+                processed_tokens = []
+                display_prompt_parts = []
+                replacements_made = False
+                vocab_keys = stoi.keys()
+                
+                for token in initial_tokens:
+                    if token in stoi:
+                        processed_tokens.append(token)
+                        display_prompt_parts.append(token)
+                    else:
+                        replacement_token = None
+                        if unk_strat == "Levenshtein Distance":
+                            replacement_token = find_closest_word_using_levelshtein(token, vocab_keys)
+                        elif unk_strat == "Random Token":
+                            replacement_token = find_random_word(vocab_keys)
+                        
+                        if replacement_token:
+                            replacements_made = True
+                            processed_tokens.append(replacement_token)
+                            display_prompt_parts.append(f" /* UNKN: {token} -> {replacement_token} */ {replacement_token}")
+                        else: 
+                            processed_tokens.append("<UNKN>")
+                            display_prompt_parts.append(token)
+                
+                display_prompt = ""
+                for part in display_prompt_parts:
+                    if part == '\\n':
+                        display_prompt += "\n"
+                    elif part == '\\s':
+                        display_prompt += " "
+                    else:
+                        display_prompt += part
+
+                if replacements_made:
+                    st.info(f"Replaced unknown tokens using the '{unk_strat}' strategy.")
+                
+                
                 with st.spinner("Generating code..."):
-                    tokenized_prompt = tokenize_prompt_string(code_prompt)
                     best_code = generate_code(
                         best_model,
                         itos,
                         stoi,
-                        tokenized_prompt,
+                        processed_tokens,
                         ctx_window,
                         device,
                         code_max_len,
@@ -526,7 +667,7 @@ with tab2:
                         final_model,
                         itos,
                         stoi,
-                        tokenized_prompt,
+                        processed_tokens,
                         ctx_window,
                         device,
                         code_max_len,
@@ -535,12 +676,12 @@ with tab2:
                 res_col1, res_col2 = st.columns(2)
                 with res_col1:
                     st.subheader("Best Model (Min Validation Error)")
-                    st.code(code_prompt + best_code, language="c")
+                    st.code(display_prompt + best_code, language="c")
                     with st.expander("Visualize Code Token Embeddings"):
                         visualize_code_embeddings(best_model, stoi)
                 with res_col2:
                     st.subheader("Final Model (Min Training Error)")
-                    st.code(code_prompt + final_code, language="c")
+                    st.code(display_prompt + final_code, language="c")
                     with st.expander("Visualize Code Token Embeddings"):
                         visualize_code_embeddings(final_model, stoi)
             else:
