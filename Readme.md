@@ -22,7 +22,7 @@ For text-based datasets, you can remove special characters except “full stop (
 
 ```py
 import re
-line = re.sub('[^a-zA-Z0-9 \.]', '', line)
+line = re.sub('[^a-zA-Z0-9 \.]', ' ', line)
 ```
 
 It will remove everything except alphanumeric characters, space and full-stop.
@@ -41,15 +41,18 @@ You will get something like “. . . . . ---> to” whenever there is a paragrap
 #### 1.2 Model Design and Training [1 marks]
 
 Build an MLP-based text generator with the following structure:
-	- Embedding dimension: 32 or 64
-	- Hidden layers: 1–2 (1024 neurons each)
-	- Activation: ReLU or Tanh
-	- Output: Softmax over vocabulary
+
+- Embedding dimension: 32 or 64
+- Hidden layers: 1–2 (1024 neurons each)
+- Activation: ReLU or Tanh
+- Output: Softmax over vocabulary
+
 Use Google Colab or Kaggle for training (use maximum 500-1000 epochs). Start the assignment early, as training takes time. 
- Report in notebook:
-	- Training vs validation loss plot
-	- Final validation loss/accuracy
-	- Example predictions and commentary on learning behavior.
+
+Report in notebook:
+- Training vs validation loss plot
+- Final validation loss/accuracy
+- Example predictions and commentary on learning behavior.
 
 
 #### 1.3 Embedding Visualization and Interpretation [1 mark]
